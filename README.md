@@ -15,6 +15,10 @@ speak either.
    chat with that contact, ready to send.
 2. **Read a reply in English.** Paste in a message you received, in
    whatever language, and get a natural English translation back.
+3. **Save contacts so you don't retype numbers.** Give a number a name
+   once and it's remembered for next time — saved privately in your
+   own browser, not on the server, so nobody else who uses the app can
+   see your contacts.
 
 Tool 2 never touches your actual WhatsApp inbox — you copy the message
 in by hand, the same way you'd paste it into Google Translate.
@@ -36,6 +40,12 @@ manual copy-paste.
 - If Claude can't make sense of something, or a request fails, you get
   a friendly error message instead of a crash. Phone numbers are
   checked for the right format before the WhatsApp link is built.
+- Saved contacts use browser local storage (via the
+  `streamlit-local-storage` package) instead of a database. That
+  means they're private to whoever's browser saved them and never
+  pass through any shared storage — but they also won't follow you to
+  a different browser or device, and clearing your browser data wipes
+  them.
 
 ## Run it yourself
 

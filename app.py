@@ -12,13 +12,16 @@ Deploy:        push to GitHub, then deploy on share.streamlit.io
 
 from __future__ import annotations
 
+import json
 import re
 import urllib.parse
 
 import anthropic
 import streamlit as st
+from streamlit_local_storage import LocalStorage
 
 PHONE_PATTERN = re.compile(r"\d{7,15}")
+CONTACTS_KEY = "wa_contacts"
 
 # ---------------------------------------------------------------------------
 # The Claude client. st.secrets reads from .streamlit/secrets.toml locally,
@@ -26,6 +29,11 @@ PHONE_PATTERN = re.compile(r"\d{7,15}")
 # either way, your API key never gets written into this file or into git.
 # ---------------------------------------------------------------------------
 client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+
+# Each visitor's saved contacts live in their own browser's local storage --
+# never on the server, never shared between visitors. LocalStorage() pulls
+# whatever's already there into this session on first run.
+local_storage = LocalStorage()
 
 LANGUAGES = ["German", "Italian", "French", "Spanish", "Persian", "Other..."]
 
@@ -38,15 +46,22 @@ TONES = {
     "Neutral": "clear and straightforward, neither too casual nor too formal",
 }
 
-#to prevent typing each time the phone numbers, one can predefine the frequent contacts
-#country code is needed without the +sign 
 
-CONTACTS = {
-    "Add a new number": "",
-    #example:"1123456789"
-    # "Marco": "393331234567",
-    # "Anna": "491701234567",
-}
+def load_contacts() -> dict[str, str]:
+    """Read this visitor's saved name -> phone number contacts back out of
+    their browser's local storage."""
+    raw = local_storage.getItem(CONTACTS_KEY)
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+
+
+def save_contacts(contacts: dict[str, str]) -> None:
+    """Write this visitor's contacts back to their browser's local storage."""
+    local_storage.setItem(CONTACTS_KEY, json.dumps(contacts))
 
 
 def translate(text: str, language: str, tone_description: str) -> str | None:
@@ -157,15 +172,29 @@ if "translated" in st.session_state:
         "Works for individual contacts only -- WhatsApp doesn't support "
         "opening an existing group chat with text pre-filled."
     )
-    contact_choice = st.selectbox("Recipient", list(CONTACTS.keys()))
+    contacts = load_contacts()
+    contact_choice = st.selectbox("Recipient", ["Add a new number"] + sorted(contacts))
     if contact_choice == "Add a new number":
         phone = st.text_input(
             "Recipient's WhatsApp number (country code, digits only, e.g. 41791234567)"
         )
+        if phone.strip() and PHONE_PATTERN.fullmatch(phone.strip()):
+            save_name = st.text_input(
+                "Save this number for next time (optional)", placeholder="e.g. Marco"
+            )
+            if save_name.strip() and st.button("Save contact"):
+                contacts[save_name.strip()] = phone.strip()
+                save_contacts(contacts)
+                st.success(f"Saved {save_name.strip()} -- only visible in this browser.")
+                st.rerun()
     else:
-        # Pull the number straight from CONTACTS -- nothing to retype.
-        phone = CONTACTS[contact_choice]
+        # Pull the number straight from this browser's saved contacts.
+        phone = contacts[contact_choice]
         st.caption(f"Sending to: {phone}")
+        if st.button("Remove this contact"):
+            contacts.pop(contact_choice, None)
+            save_contacts(contacts)
+            st.rerun()
 
     if phone:
         if not PHONE_PATTERN.fullmatch(phone.strip()):
