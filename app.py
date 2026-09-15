@@ -10,10 +10,15 @@ Run locally:   streamlit run app.py
 Deploy:        push to GitHub, then deploy on share.streamlit.io
 """
 
+from __future__ import annotations
+
+import re
 import urllib.parse
 
 import anthropic
 import streamlit as st
+
+PHONE_PATTERN = re.compile(r"\d{7,15}")
 
 # ---------------------------------------------------------------------------
 # The Claude client. st.secrets reads from .streamlit/secrets.toml locally,
@@ -44,9 +49,10 @@ CONTACTS = {
 }
 
 
-def translate(text: str, language: str, tone_description: str) -> str:
+def translate(text: str, language: str, tone_description: str) -> str | None:
     """Ask Claude to translate `text` into `language`, matching the given
-    tone rather than translating word-for-word."""
+    tone rather than translating word-for-word. Returns None if Claude
+    couldn't produce a translation (e.g. it didn't recognize the text)."""
     prompt = (
         f"Translate the following WhatsApp message from English into {language}. "
         f"Match a tone that is {tone_description} -- do not translate "
@@ -54,17 +60,22 @@ def translate(text: str, language: str, tone_description: str) -> str:
         "explanation, or extra text.\n\n"
         f"Message: {text}"
     )
-    response = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=300,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.content[0].text.strip()
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-5",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        result = response.content[0].text.strip()
+    except (anthropic.APIError, IndexError, AttributeError):
+        return None
+    return result or None
 
 
-def translate_to_english(text: str) -> str:
+def translate_to_english(text: str) -> str | None:
     """Ask Claude to translate `text` (in whatever language it's in) into
-    natural English. No source language needed -- Claude detects it."""
+    natural English. No source language needed -- Claude detects it.
+    Returns None if Claude couldn't produce a translation."""
     prompt = (
         "Translate the following message into natural, everyday English, "
         "keeping the tone of the original rather than translating "
@@ -72,12 +83,16 @@ def translate_to_english(text: str) -> str:
         "explanation, or extra text.\n\n"
         f"Message: {text}"
     )
-    response = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=300,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.content[0].text.strip()
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-5",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        result = response.content[0].text.strip()
+    except (anthropic.APIError, IndexError, AttributeError):
+        return None
+    return result or None
 
 
 # ---------------------------------------------------------------------------
@@ -119,9 +134,17 @@ if st.button("Translate"):
         st.warning("Describe a tone first.")
     else:
         with st.spinner("Translating..."):
+            result = translate(text, language, tone_description)
+        if result is None:
+            st.error(
+                "Sorry, that message couldn't be translated -- it may contain "
+                "a word or phrase Claude didn't recognize. Try rephrasing it."
+            )
+            st.session_state.pop("translated", None)
+        else:
             # Store the result in session_state so it survives the rerun
             # that happens when you later type into the phone number box.
-            st.session_state["translated"] = translate(text, language, tone_description)
+            st.session_state["translated"] = result
 
 # Only show the rest once we actually have a translation to work with.
 if "translated" in st.session_state:
@@ -145,10 +168,17 @@ if "translated" in st.session_state:
         st.caption(f"Sending to: {phone}")
 
     if phone:
-        # WhatsApp's "click to chat" link: opens a chat with the text
-        # already typed in, no API or business account needed.
-        url = f"https://wa.me/{phone}?text={urllib.parse.quote(translated)}"
-        st.link_button("Open in WhatsApp", url)
+        if not PHONE_PATTERN.fullmatch(phone.strip()):
+            st.warning(
+                "That doesn't look like a valid number. Enter it as the "
+                "country code followed directly by the number -- digits "
+                "only, no '+' and no spaces (e.g. 41791234567)."
+            )
+        else:
+            # WhatsApp's "click to chat" link: opens a chat with the text
+            # already typed in, no API or business account needed.
+            url = f"https://wa.me/{phone.strip()}?text={urllib.parse.quote(translated)}"
+            st.link_button("Open in WhatsApp", url)
 
 # ---------------------------------------------------------------------------
 # Second, separate tool: translate an incoming message *into* English.
@@ -166,7 +196,15 @@ if st.button("Translate to English"):
         st.warning("Paste a message first.")
     else:
         with st.spinner("Translating..."):
-            st.session_state["received_translation"] = translate_to_english(received)
+            result = translate_to_english(received)
+        if result is None:
+            st.error(
+                "Sorry, that message couldn't be translated -- it may contain "
+                "a word or phrase Claude didn't recognize. Try rephrasing it."
+            )
+            st.session_state.pop("received_translation", None)
+        else:
+            st.session_state["received_translation"] = result
 
 if "received_translation" in st.session_state:
     st.text_area(
